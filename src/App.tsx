@@ -5,7 +5,7 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { VideoClip, TitleSettings, TEXT_STYLES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, Type, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Type, ChevronDown, ChevronUp, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -60,14 +60,32 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-sans pb-24">
-      {/* Mobile Header */}
-      <header className="sticky top-0 z-10 bg-[var(--color-bg)]/90 backdrop-blur-md border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between shadow-sm">
-        <h1 className="text-2xl font-display font-bold tracking-tight text-[var(--color-text)] italic">
-          The 1s Vlog<span className="text-[var(--color-accent)] not-italic">.</span>
-        </h1>
-        <div className="text-[10px] font-medium text-[var(--color-text-muted)] border border-[var(--color-border)] bg-white px-2 py-0.5 rounded-full">
-          Free Edition
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-black/5 px-4 py-3 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-display font-bold tracking-tight text-black italic">
+            The 1s Vlog<span className="text-[var(--color-accent)] not-italic">.</span>
+          </h1>
+          <div className="text-[9px] font-bold text-[var(--color-accent)] border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/5 px-1.5 py-0.5 rounded-md uppercase tracking-tighter">
+            Free
+          </div>
         </div>
+        <button
+          onClick={() => {
+            if (navigator.share) {
+              navigator.share({
+                title: 'The 1s Vlog.',
+                text: '1秒動画を繋げるVlogアプリ',
+                url: window.location.href,
+              });
+            } else {
+              navigator.clipboard.writeText(window.location.href);
+              alert("リンクをコピーしました");
+            }
+          }}
+          className="w-10 h-10 rounded-full flex items-center justify-center bg-black/5 hover:bg-black/10 active:scale-90 transition-all border border-black/5"
+        >
+          <Share2 className="w-5 h-5 text-black/60" />
+        </button>
       </header>
 
       <main className="max-w-md mx-auto p-4 space-y-6">
@@ -130,8 +148,8 @@ export default function App() {
                         key={style.value}
                         onClick={() => setTitleSettings({ ...titleSettings, style: style.value })}
                         className={`text-xs py-2 rounded-lg border transition-all duration-200 ${titleSettings.style === style.value
-                            ? "bg-[var(--color-text)] border-[var(--color-text)] text-white shadow-md transform scale-105"
-                            : "bg-white border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg)]"
+                          ? "bg-[var(--color-text)] border-[var(--color-text)] text-white shadow-md transform scale-105"
+                          : "bg-white border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg)]"
                           }`}
                       >
                         {style.label}

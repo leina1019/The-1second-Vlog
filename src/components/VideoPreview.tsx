@@ -287,73 +287,76 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   useEffect(() => { if (!isPlaying) renderFrame(0); }, [clips, isPlaying, renderFrame]);
 
+  // クリップやタイトルが変わったら以前のエクスポートデータを破棄
+  useEffect(() => {
+    setExportBlob(null);
+  }, [clips, titleSettings]);
+
   /**
-   * オフラインレンダリング:
-   * 1. 1コマずつ画像を生成して ffmpeg.wasm の仮想FSに書き込む (rendering)
-   * 2. 全画像を MP4 にエンコードする (encoding)
+   * 統合された保存アクション:
+   * 1. 動画が未作成ならレンダリング（rendering -> encoding）を開始
+   * 2. 完了後、または既に作成済みの場合は、即座に共有メニュー（カメラロール保存）を開く
    */
-  const handleExport = async () => {
+  const handleMainAction = async () => {
     if (isExporting || !isReady) return;
 
+    if (exportBlob) {
+      handleSaveToCameraRoll();
+      return;
+    }
+
+    // エクスポート開始
     setIsExporting(true);
     setIsPlaying(false);
     setExportPhase("rendering");
     setExportProgress(0);
     setError(null);
-    setExportBlob(null);
 
     const fps = 30;
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps));
     const offscreenCanvas = document.createElement("canvas");
-    offscreenCanvas.width = 1280; // 16:9 横型
+    offscreenCanvas.width = 1280;
     offscreenCanvas.height = 720;
 
     try {
       const ffmpeg = await loadFFmpeg();
 
-      // 1. レンダリング
       for (let i = 0; i < totalFrames; i++) {
         const frameTime = i / fps;
         await renderFrame(frameTime, offscreenCanvas);
-
         const blob = await new Promise<Blob | null>(res => offscreenCanvas.toBlob(res, 'image/jpeg', 0.85));
         if (!blob) throw new Error("Frame error");
-
         const fileName = `f${i.toString().padStart(5, '0')}.jpg`;
         await ffmpeg.writeFile(fileName, await fetchFile(blob));
-
         setExportProgress(Math.round((i / totalFrames) * 50));
       }
 
-      // 2. エンコード
       setExportPhase("encoding");
-      await ffmpeg.exec([
-        "-framerate", fps.toString(),
-        "-i", "f%05d.jpg",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-preset", "ultrafast",
-        "-crf", "23",
-        "out.mp4"
-      ]);
+      await ffmpeg.exec(["-framerate", fps.toString(), "-i", "f%05d.jpg", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "out.mp4"]);
 
       const data = await ffmpeg.readFile("out.mp4");
       const mp4Blob = new Blob([data], { type: "video/mp4" });
       setExportBlob(mp4Blob);
 
-      // 掃除
       for (let i = 0; i < totalFrames; i++) {
         await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
       }
 
-      if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-        triggerDownload(mp4Blob, `vlog-${Date.now()}.mp4`);
+      // 書き出し完了後、自動で保存/共有をトリガー
+      const fileName = `vlog-${Date.now()}.mp4`;
+      const file = new File([mp4Blob], fileName, { type: "video/mp4" });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'The 1s Vlog.' });
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
+      } else {
+        triggerDownload(mp4Blob, fileName);
       }
+
     } catch (err) {
       console.error(err);
-      setError("作成中に問題が発生しました。もう一度お試しください。");
+      setError("作成中に問題が発生しました。");
     } finally {
       setIsExporting(false);
       setExportPhase("idle");
@@ -367,10 +370,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
     if (navigator.share && navigator.canShare({ files: [file] })) {
       try {
-        await navigator.share({
-          files: [file],
-          title: 'The 1s Vlog.',
-        });
+        await navigator.share({ files: [file], title: 'The 1s Vlog.' });
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
       } catch {
@@ -397,7 +397,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       <div className="relative aspect-video max-h-[65vh] mx-auto bg-black rounded-[2.5rem] overflow-hidden border-[6px] border-[#1a1a1a] shadow-2xl group">
         <canvas ref={canvasRef} width={1280} height={720} className="w-full h-full object-contain" />
 
-        {/* 状態オーバーレイ */}
         <AnimatePresence>
           {(isExporting || !isReady) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -422,7 +421,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           )}
         </AnimatePresence>
 
-        {/* 再生ボタン */}
         {isReady && !isPlaying && !isExporting && (
           <div className="absolute inset-0 flex items-center justify-center cursor-pointer z-10" onClick={() => setIsPlaying(true)}>
             <motion.div whileTap={{ scale: 0.9 }} className="w-20 h-20 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20">
@@ -432,7 +430,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         )}
 
         {error && (
-          <div className="absolute inset-x-4 bottom-20 bg-red-500/90 text-white p-4 rounded-2xl flex items-center gap-3 z-40 backdrop-blur-lg">
+          <div className="absolute inset-x-4 bottom-2 bg-red-500/90 text-white p-4 rounded-2xl flex items-center gap-3 z-40 backdrop-blur-lg">
             <AlertCircle className="shrink-0" />
             <p className="text-xs font-bold">{error}</p>
           </div>
@@ -452,16 +450,15 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Button variant={exportBlob ? "outline" : "accent"} onClick={handleExport} disabled={clips.length === 0 || isExporting} className="rounded-2xl h-14 font-bold">
-            {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-            {exportBlob ? "作り直す" : "動画を作成"}
-          </Button>
-          <Button variant="accent" onClick={handleSaveToCameraRoll} disabled={!exportBlob || isExporting} className="rounded-2xl h-14 font-bold shadow-xl shadow-[var(--color-accent)]/20">
-            <Share2 className="w-4 h-4 mr-2" />
-            保存する
-          </Button>
-        </div>
+        <Button
+          variant="accent"
+          onClick={handleMainAction}
+          disabled={clips.length === 0 || isExporting}
+          className="rounded-2xl h-14 font-bold shadow-xl shadow-[var(--color-accent)]/20"
+        >
+          {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : exportBlob ? <Share2 className="w-4 h-4 mr-2" /> : <Download className="w-4 h-4 mr-2" />}
+          {isExporting ? "作成中..." : "動画を保存する"}
+        </Button>
       </div>
     </div>
   );
