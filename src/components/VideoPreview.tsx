@@ -287,9 +287,30 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   useEffect(() => { if (!isPlaying) renderFrame(0); }, [clips, isPlaying, renderFrame]);
 
-  // クリップやタイトルが変わったら以前のエクスポートデータを破棄
+  // 再生位置の変更（シーク機能）
+  const handleSeek = useCallback((time: number) => {
+    setCurrentTime(time);
+    if (!isPlaying) {
+      // 停止中の時はその瞬間のフレームを強制描画
+      setTimeout(() => renderFrame(time), 0);
+    }
+    // 再生中の場合は、animateループが次のフレームで自動的に正しい位置を拾う
+    if (isPlaying) {
+      startTimeRef.current = performance.now() - (time * 1000);
+    }
+  }, [isPlaying, renderFrame]);
+
+  useEffect(() => {
+    if (isReady && !isPlaying) {
+      // ロード完了時に初回フレームを確実に描画
+      const timer = setTimeout(() => renderFrame(0), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isReady, isPlaying, renderFrame, clips]);
+
   useEffect(() => {
     setExportBlob(null);
+    setCurrentTime(0); // クリップ変更時は0秒に戻す
   }, [clips, titleSettings]);
 
   /**
@@ -382,7 +403,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   };
 
   return (
-    <div className="space-y-6 relative">
+    <div className="space-y-4 relative">
       <AnimatePresence>
         {showSuccess && (
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
@@ -394,26 +415,22 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         )}
       </AnimatePresence>
 
-      <div className="relative aspect-video max-h-[65vh] mx-auto bg-black rounded-[2.5rem] overflow-hidden border-[6px] border-[#1a1a1a] shadow-2xl group">
+      <div className="relative aspect-video max-h-[60vh] mx-auto bg-black rounded-[2rem] overflow-hidden border-4 border-white shadow-xl group">
         <canvas ref={canvasRef} width={1280} height={720} className="w-full h-full object-contain" />
 
         <AnimatePresence>
           {(isExporting || !isReady) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 backdrop-blur-xl z-30"
+              className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-30"
             >
-              <Loader2 className="w-10 h-10 text-[var(--color-accent)] animate-spin mb-6" />
-              <p className="text-white text-xs font-bold tracking-[0.2em] uppercase opacity-80 mb-6">
-                {!isReady ? "Media Loading" : exportPhase === "rendering" ? "Perfect Rendering" : "Optimizing MP4"}
+              <Loader2 className="w-10 h-10 text-[var(--color-accent)] animate-spin mb-4" />
+              <p className="text-white text-[10px] font-bold tracking-[0.2em] uppercase opacity-60">
+                {!isReady ? "Preparing Media" : exportPhase === "rendering" ? "Rendering Frames" : "Encoding Video"}
               </p>
               {isExporting && (
-                <div className="w-48">
-                  <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
+                <div className="w-40 mt-4">
+                  <div className="h-1 bg-white/10 rounded-full overflow-hidden">
                     <motion.div className="h-full bg-[var(--color-accent)]" animate={{ width: `${exportProgress}%` }} transition={{ duration: 0.3 }} />
-                  </div>
-                  <div className="flex justify-between text-[10px] font-mono text-white/40">
-                    <span>{exportPhase === 'rendering' ? 'RENDER' : 'ENCODE'}</span>
-                    <span>{exportProgress}%</span>
                   </div>
                 </div>
               )}
@@ -421,32 +438,45 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           )}
         </AnimatePresence>
 
-        {isReady && !isPlaying && !isExporting && (
+        {!isPlaying && !isExporting && isReady && (
           <div className="absolute inset-0 flex items-center justify-center cursor-pointer z-10" onClick={() => setIsPlaying(true)}>
-            <motion.div whileTap={{ scale: 0.9 }} className="w-20 h-20 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20">
-              <Play className="w-8 h-8 text-white fill-current ml-1" />
+            <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 text-white shadow-2xl">
+              <Play className="w-6 h-6 fill-current ml-1" />
             </motion.div>
-          </div>
-        )}
-
-        {error && (
-          <div className="absolute inset-x-4 bottom-2 bg-red-500/90 text-white p-4 rounded-2xl flex items-center gap-3 z-40 backdrop-blur-lg">
-            <AlertCircle className="shrink-0" />
-            <p className="text-xs font-bold">{error}</p>
           </div>
         )}
       </div>
 
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between bg-black/5 p-4 rounded-3xl border border-black/5">
-          <button onClick={() => setIsPlaying(!isPlaying)} disabled={clips.length === 0 || isExporting}
-            className="w-12 h-12 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-30"
-          >
-            {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-          </button>
-          <div className="text-right">
-            <p className="text-[10px] uppercase font-bold text-black/30 tracking-tight">Current Time</p>
-            <p className="text-xl font-mono font-bold">{currentTime.toFixed(1)}s</p>
+      <div className="space-y-4">
+        {/* 大人可愛いコントロールパネル */}
+        <div className="bg-white/90 backdrop-blur-xl p-5 rounded-[2.5rem] border border-black/5 shadow-sm space-y-4">
+          <div className="flex items-center gap-5">
+            <button
+              onClick={() => setIsPlaying(!isPlaying)}
+              disabled={clips.length === 0 || isExporting}
+              className="w-12 h-12 rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 flex items-center justify-center text-white shadow-lg shadow-[var(--color-accent)]/20 active:scale-95 transition-all disabled:opacity-30 disabled:grayscale"
+            >
+              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+            </button>
+
+            <div className="flex-1 space-y-2">
+              <input
+                type="range"
+                min={0}
+                max={totalDuration || 1}
+                step={0.01}
+                value={currentTime}
+                onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-black/5 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)] transition-all"
+                style={{
+                  background: `linear-gradient(to right, var(--color-accent) ${(currentTime / (totalDuration || 1)) * 100}%, #eee 0%)`
+                }}
+              />
+              <div className="flex justify-between items-center text-[10px] font-bold font-mono tracking-tighter text-black/30 px-0.5">
+                <span className={currentTime > 0 ? "text-[var(--color-accent)]" : ""}>{currentTime.toFixed(1)}s</span>
+                <span>{totalDuration.toFixed(1)}s</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -454,12 +484,21 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           variant="accent"
           onClick={handleMainAction}
           disabled={clips.length === 0 || isExporting}
-          className="rounded-2xl h-14 font-bold shadow-xl shadow-[var(--color-accent)]/20"
+          className="w-full h-14 rounded-[2rem] font-bold shadow-xl shadow-[var(--color-accent)]/30 text-base active:scale-95 transition-transform"
         >
-          {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : exportBlob ? <Share2 className="w-4 h-4 mr-2" /> : <Download className="w-4 h-4 mr-2" />}
+          {isExporting ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : exportBlob ? <Share2 className="w-5 h-5 mr-3" /> : <Download className="w-5 h-5 mr-3" />}
           {isExporting ? "作成中..." : "動画を保存する"}
         </Button>
       </div>
+
+      {error && (
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+          className="p-4 bg-red-50 text-red-500 rounded-2xl flex items-center gap-3 border border-red-100"
+        >
+          <AlertCircle className="w-5 h-5 shrink-0" />
+          <p className="text-[11px] font-bold leading-tight">{error}</p>
+        </motion.div>
+      )}
     </div>
   );
 }
