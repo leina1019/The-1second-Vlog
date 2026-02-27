@@ -33,7 +33,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportPhase, setExportPhase] = useState<"rendering" | "encoding" | "idle">("idle");
   const [exportProgress, setExportProgress] = useState(0);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [exportBlob, setExportBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -376,31 +376,85 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         setExportProgress(Math.round((i / totalFrames) * 50));
       }
       setExportPhase("encoding");
-      await ffmpeg.exec(["-framerate", fps.toString(), "-i", "f%05d.jpg", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "out.mp4"]);
+      setExportProgress(40);
+
+      // --- 音声トラックの抽出と合成 ---
+      let concatText = "";
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i];
+        const ext = clip.file.name.split('.').pop() || 'mp4';
+        const clipFileName = `clip${i}.${ext}`;
+        await ffmpeg.writeFile(clipFileName, await fetchFile(clip.file));
+
+        const audioFileName = `audio${i}.aac`;
+        const exitCode = await ffmpeg.exec([
+          "-ss", clip.startTime.toString(),
+          "-t", clip.clipDuration.toString(),
+          "-i", clipFileName,
+          "-vn",
+          "-ac", "2",
+          "-ar", "44100",
+          "-c:a", "aac",
+          audioFileName
+        ]);
+
+        if (exitCode !== 0) {
+          console.warn(`No audio in clip ${i}, generating silence.`);
+          await ffmpeg.exec([
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", clip.clipDuration.toString(),
+            "-c:a", "aac",
+            audioFileName
+          ]);
+        }
+        concatText += `file '${audioFileName}'\n`;
+      }
+
+      await ffmpeg.writeFile('concat.txt', concatText);
+      await ffmpeg.exec([
+        "-f", "concat",
+        "-safe", "0",
+        "-i", "concat.txt",
+        "-c", "copy",
+        "merged_audio.aac"
+      ]);
+
+      setExportProgress(60); // 音声抽出完了
+
+      // 映像と音声を結合して最終エンコード
+      await ffmpeg.exec([
+        "-framerate", fps.toString(),
+        "-i", "f%05d.jpg",
+        "-i", "merged_audio.aac",
+        "-c:v", "libx264",
+        "-c:a", "copy",
+        "-pix_fmt", "yuv420p",
+        "-preset", "ultrafast",
+        "-crf", "23",
+        "-shortest",
+        "out.mp4"
+      ]);
+
+      setExportProgress(100);
+
       const data = await ffmpeg.readFile("out.mp4");
       const mp4Blob = new Blob([data], { type: "video/mp4" });
       setExportBlob(mp4Blob);
-      for (let i = 0; i < totalFrames; i++) await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
 
-      // 1クリック保存への回帰（シェア・ダウンロードのフォールバック）
-      const fileName = `vlog-${Date.now()}.mp4`;
-      const file = new File([mp4Blob], fileName, { type: "video/mp4" });
-      if (navigator.share && navigator.canShare({ files: [file] })) {
-        try {
-          // まずシェアを試みる（iOSではここがユーザー操作と見なされず弾かれる場合がある）
-          await navigator.share({ files: [file], title: 'The 1s Vlog.' });
-        } catch (err) {
-          // エラー（NotAllowedError等）の場合は直接ファイルダウンロードに自動遷移
-          triggerDownload(mp4Blob, fileName);
-        }
-      } else {
-        // シェア機能自体がない場合はそのままダウンロード
-        triggerDownload(mp4Blob, fileName);
+      // Cleanup
+      for (let i = 0; i < totalFrames; i++) await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
+      for (let i = 0; i < clips.length; i++) {
+        const ext = clips[i].file.name.split('.').pop() || 'mp4';
+        try { await ffmpeg.deleteFile(`clip${i}.${ext}`); } catch (e) { }
+        try { await ffmpeg.deleteFile(`audio${i}.aac`); } catch (e) { }
       }
+      try { await ffmpeg.deleteFile('concat.txt'); } catch (e) { }
+      try { await ffmpeg.deleteFile('merged_audio.aac'); } catch (e) { }
 
       // 作成完了の合図としてポップアップを表示
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 5000); // 読めるように5秒に延長
+      setSuccessMessage("動画が完成しました！\n下部ボタンから保存してください");
+      setTimeout(() => setSuccessMessage(null), 5000);
 
     } catch (err) {
       console.error(err);
@@ -417,22 +471,39 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     if (!exportBlob) return;
     const fileName = `vlog-${Date.now()}.mp4`;
     const file = new File([exportBlob], fileName, { type: "video/mp4" });
+
+    const showSaveSuccess = () => {
+      setSuccessMessage("保存完了しました✅");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    };
+
     if (navigator.share && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file], title: 'The 1s Vlog.' });
-      } catch { triggerDownload(exportBlob, fileName); }
-    } else triggerDownload(exportBlob, fileName);
+        showSaveSuccess();
+      } catch {
+        triggerDownload(exportBlob, fileName);
+        showSaveSuccess();
+      }
+    } else {
+      triggerDownload(exportBlob, fileName);
+      showSaveSuccess();
+    }
   };
 
   return (
     <div className="space-y-4 relative">
       <AnimatePresence>
-        {showSuccess && (
+        {successMessage && (
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-black text-white rounded-full px-5 py-2.5 shadow-2xl flex items-center gap-2.5 border border-white/20 whitespace-nowrap"
           >
             <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
-            <span className="text-[11px] font-bold tracking-wide">動画が完成しました！<br />下部ボタンから保存してください</span>
+            <span className="text-[11px] font-bold tracking-wide">
+              {successMessage.split('\n').map((line, i) => (
+                <span key={i}>{line}{i === 0 && successMessage.includes('\n') && <br />}</span>
+              ))}
+            </span>
           </motion.div>
         )}
       </AnimatePresence>
