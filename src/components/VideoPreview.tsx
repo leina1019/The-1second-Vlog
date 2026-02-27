@@ -114,7 +114,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   }, [clips]);
 
   // テキストオーバーレイ描画
-  const drawText = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const drawText = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, isHighQuality: boolean = false) => {
     const { text, style } = titleSettings;
     if (!text || style === "none") return;
 
@@ -127,8 +127,11 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.font = `bold ${height * 0.08}px "Inter", sans-serif`;
-        ctx.shadowColor = "rgba(0,0,0,0.6)";
-        ctx.shadowBlur = 12;
+        // 🔥 アダプティブ描画: プレビュー時は影をスキップ、保存時のみ適用
+        if (isHighQuality) {
+          ctx.shadowColor = "rgba(0,0,0,0.6)";
+          ctx.shadowBlur = 12;
+        }
         ctx.fillStyle = "white";
         ctx.fillText(text, centerX, centerY);
         break;
@@ -175,6 +178,11 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "middle";
         ctx.font = `italic 700 ${height * 0.12}px "serif"`;
         ctx.fillStyle = "white";
+        // 🔥 高品質時のみ少し影をつける
+        if (isHighQuality) {
+          ctx.shadowColor = "rgba(0,0,0,0.3)";
+          ctx.shadowBlur = 8;
+        }
         ctx.fillText(text, centerX, centerY);
         break;
     }
@@ -183,10 +191,14 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   // フレーム描画
   const renderFrame = useCallback(async (time: number, targetCanvas?: HTMLCanvasElement) => {
+    // 🔥 保存用キャンバスかプレビュー用かを判定
     const canvas = targetCanvas || canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
+
+    // 🔥 保存（targetCanvasあり）の時だけ高品質フラグを立てる
+    const isHighQuality = !!targetCanvas;
 
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -251,7 +263,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           }
           ctx.drawImage(video, drawX, drawY, drawW, drawH);
         }
-        drawText(ctx, canvas.width, canvas.height);
+        drawText(ctx, canvas.width, canvas.height, isHighQuality);
       }
     }
   }, [clips, drawText, totalDuration]);

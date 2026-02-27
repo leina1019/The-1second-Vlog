@@ -3,7 +3,7 @@ import { VideoClip } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatTime, cn } from "@/lib/utils";
-import { Trash2, Play, Pause } from "lucide-react";
+import { Trash2, Play, Pause, ImageIcon } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
@@ -16,8 +16,10 @@ interface ClipItemProps {
 
 export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [thumbnail, setThumbnail] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoUrlRef = useRef<string | null>(null);
+  const thumbVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const {
     attributes,
@@ -35,6 +37,49 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
     opacity: isDragging ? 0.5 : 1,
   };
 
+  // サムネイル生成
+  useEffect(() => {
+    let isMounted = true;
+    const captureThumbnail = async () => {
+      const video = document.createElement("video");
+      const url = URL.createObjectURL(clip.file);
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+
+      video.currentTime = clip.startTime;
+
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        video.addEventListener('seeked', onSeeked);
+        // Fallback
+        setTimeout(resolve, 1000);
+      });
+
+      if (!isMounted) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 180;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        setThumbnail(canvas.toDataURL("image/jpeg", 0.7));
+      }
+
+      URL.revokeObjectURL(url);
+    };
+
+    captureThumbnail();
+    return () => { isMounted = false; };
+  }, [clip.file, clip.startTime]);
+
   const handlePlayPreview = (e: React.MouseEvent) => {
     e.stopPropagation();
 
@@ -47,11 +92,9 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
       setIsPlaying(false);
     } else {
       setIsPlaying(true);
-      // We need to wait for the next tick for the video element to be in DOM if we were lazy loading
     }
   };
 
-  // Effect to handle play/pause and cleanup
   useEffect(() => {
     if (isPlaying && videoRef.current) {
       videoRef.current.currentTime = clip.startTime;
@@ -91,17 +134,20 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
               playsInline
               onEnded={() => setIsPlaying(false)}
             />
+          ) : thumbnail ? (
+            <img src={thumbnail} className="w-full h-full object-cover" alt="thumbnail" />
           ) : (
             <div className="w-full h-full flex items-center justify-center bg-gray-800">
-              <Play className="w-6 h-6 text-white/20" />
+              <ImageIcon className="w-6 h-6 text-white/10" />
             </div>
           )}
-          <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+
+          <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/30 transition-colors">
             <button
-              className="p-1.5 bg-white/80 rounded-full text-[var(--color-text)] backdrop-blur-sm active:scale-95 transition-transform shadow-sm hover:bg-white"
+              className="p-1.5 bg-white/90 rounded-full text-[var(--color-text)] backdrop-blur-sm active:scale-95 transition-transform shadow-lg hover:bg-white"
               onClick={handlePlayPreview}
             >
-              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
             </button>
           </div>
           <div className="absolute top-1 left-1 bg-[var(--color-text)] text-white text-[10px] font-display font-bold px-2 py-0.5 rounded shadow-sm">
@@ -112,7 +158,7 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
         {/* Controls */}
         <div className="flex-1 min-w-0 flex flex-col justify-between h-24 py-0.5">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="font-medium text-sm truncate text-[var(--color-text)]" title={clip.file.name}>
+            <h3 className="font-medium text-xs truncate text-[var(--color-text)] opacity-80" title={clip.file.name}>
               {clip.file.name}
             </h3>
             <Button
@@ -130,9 +176,9 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
 
           {/* Timeline Slider */}
           <div className="space-y-1.5 mt-auto">
-            <div className="flex justify-between items-center text-[10px] text-[var(--color-text-muted)] font-display">
-              <span className="bg-[var(--color-bg)] px-1.5 py-0.5 rounded border border-[var(--color-border)] font-medium">
-                開始: {formatTime(clip.startTime)}
+            <div className="flex justify-between items-center text-[9px] text-[var(--color-text-muted)] font-display">
+              <span className="bg-[#f0f0ee] px-2 py-0.5 rounded-full border border-[var(--color-border)] font-bold text-[var(--color-accent)]">
+                {formatTime(clip.startTime)}
               </span>
             </div>
             <input
@@ -142,8 +188,8 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
               step={0.1}
               value={clip.startTime}
               onChange={(e) => onUpdate(clip.id, { startTime: parseFloat(e.target.value) })}
-              onPointerDown={(e) => e.stopPropagation()} // Prevent drag when using slider
-              className="w-full accent-[var(--color-accent)] h-1.5 bg-[var(--color-border)] rounded-lg appearance-none cursor-pointer touch-none"
+              onPointerDown={(e) => e.stopPropagation()}
+              className="w-full accent-[var(--color-accent)] h-1 bg-[var(--color-border)] rounded-full appearance-none cursor-pointer touch-none"
             />
           </div>
         </div>
