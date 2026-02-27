@@ -47,7 +47,8 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
       video.muted = true;
       video.playsInline = true;
 
-      video.currentTime = clip.startTime;
+      // 0:00だと真っ黒になることが多いため、0.05秒ほどオフセットして抽出
+      video.currentTime = Math.min(clip.startTime + 0.05, clip.duration);
 
       await new Promise<void>((resolve) => {
         const onSeeked = () => {
