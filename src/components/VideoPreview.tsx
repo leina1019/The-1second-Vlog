@@ -305,8 +305,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     const fps = 30;
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps));
     const offscreenCanvas = document.createElement("canvas");
-    offscreenCanvas.width = 720; // モバイル向けバランス
-    offscreenCanvas.height = 1280;
+    offscreenCanvas.width = 1280; // 16:9 横型
+    offscreenCanvas.height = 720;
 
     try {
       const ffmpeg = await loadFFmpeg();
@@ -394,8 +394,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         )}
       </AnimatePresence>
 
-      <div className="relative aspect-[9/16] max-h-[65vh] mx-auto bg-black rounded-[2.5rem] overflow-hidden border-[6px] border-[#1a1a1a] shadow-2xl group">
-        <canvas ref={canvasRef} width={1080} height={1920} className="w-full h-full object-cover" />
+      <div className="relative aspect-video max-h-[65vh] mx-auto bg-black rounded-[2.5rem] overflow-hidden border-[6px] border-[#1a1a1a] shadow-2xl group">
+        <canvas ref={canvasRef} width={1280} height={720} className="w-full h-full object-contain" />
 
         {/* 状態オーバーレイ */}
         <AnimatePresence>
