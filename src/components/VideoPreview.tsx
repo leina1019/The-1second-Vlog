@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { VideoClip, TitleSettings } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, Download, Loader2, CheckCircle2, Share2 } from "lucide-react";
+import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
@@ -18,8 +18,13 @@ function triggerDownload(blob: Blob, fileName: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = fileName;
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 2000);
 }
 
 export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
@@ -27,32 +32,19 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
-  const [isConverting, setIsConverting] = useState(false);
-  const [convertProgress, setConvertProgress] = useState(0);
+  const [exportPhase, setExportPhase] = useState<"rendering" | "encoding" | "idle">("idle");
+  const [exportProgress, setExportProgress] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [exportBlob, setExportBlob] = useState<Blob | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const requestRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   const activeClipIdRef = useRef<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const exportTimeRef = useRef<number>(0);
-  const isProcessingFrameRef = useRef<boolean>(false);
-
-  // Refベースの状態参照でクロージャの陳腐化を防止
-  const isExportingRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
-
-  // FFmpegインスタンス
   const ffmpegRef = useRef<FFmpeg | null>(null);
-
-  // stateとrefを同期させる
-  useEffect(() => {
-    isExportingRef.current = isExporting;
-  }, [isExporting]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -64,15 +56,15 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   const loadFFmpeg = async () => {
     if (ffmpegRef.current) return ffmpegRef.current;
 
+    // Coreのバージョンと互換性を確保
     const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
     const ffmpeg = new FFmpeg();
 
-    ffmpeg.on("log", ({ message }) => {
-      console.log(message);
-    });
-
     ffmpeg.on("progress", ({ progress }) => {
-      setConvertProgress(Math.round(progress * 100));
+      // エンコードフェーズ: 50% -> 100%
+      if (exportPhase === "encoding") {
+        setExportProgress(50 + Math.round(progress * 50));
+      }
     });
 
     await ffmpeg.load({
@@ -84,7 +76,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     return ffmpeg;
   };
 
-  // 動画のプリロードとreadiness確認
+  // 動画のプリロード
   useEffect(() => {
     let loadedCount = 0;
     const totalClips = clips.length;
@@ -95,7 +87,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     }
 
     setIsReady(false);
-
     clips.forEach((clip) => {
       if (!videoElementsRef.current.has(clip.id)) {
         const video = document.createElement("video");
@@ -106,24 +97,18 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
         const onCanPlay = () => {
           loadedCount++;
-          if (loadedCount === totalClips) {
-            setIsReady(true);
-          }
+          if (loadedCount === totalClips) setIsReady(true);
           video.removeEventListener("canplaythrough", onCanPlay);
         };
         video.addEventListener("canplaythrough", onCanPlay);
-
         videoElementsRef.current.set(clip.id, video);
       } else {
         loadedCount++;
-        if (loadedCount === totalClips) {
-          setIsReady(true);
-        }
+        if (loadedCount === totalClips) setIsReady(true);
       }
     });
 
     return () => {
-      // アンマウント時のクリーンアップ
       videoElementsRef.current.forEach(v => URL.revokeObjectURL(v.src));
     };
   }, [clips]);
@@ -153,8 +138,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "bottom";
         ctx.font = `300 ${height * 0.045}px "Inter", sans-serif`;
         ctx.letterSpacing = "6px";
-        ctx.shadowColor = "rgba(0,0,0,0.4)";
-        ctx.shadowBlur = 4;
         ctx.fillStyle = "white";
         ctx.fillText(text.toUpperCase(), centerX, height * 0.92);
         break;
@@ -164,8 +147,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "bottom";
         ctx.font = `${height * 0.04}px "JetBrains Mono", monospace`;
         ctx.fillStyle = "#FFD700";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur = 2;
         const now = new Date();
         const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase();
@@ -182,11 +163,9 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.fillRect(0, height - barHeight, width, barHeight);
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = `italic 500 ${height * 0.055}px "Cormorant Garamond", serif`;
+        ctx.font = `italic 500 ${height * 0.05}px "Inter", serif`;
         ctx.fillStyle = "rgba(255,255,255,0.9)";
         ctx.letterSpacing = "6px";
-        ctx.shadowColor = "black";
-        ctx.shadowBlur = 4;
         ctx.fillText(text, centerX, height - barHeight / 2);
         break;
       }
@@ -194,52 +173,32 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       case "magazine":
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = `italic 700 ${height * 0.14}px "Playfair Display", serif`;
+        ctx.font = `italic 700 ${height * 0.12}px "serif"`;
         ctx.fillStyle = "white";
-        ctx.shadowColor = "rgba(0,0,0,0.3)";
-        ctx.shadowBlur = 20;
         ctx.fillText(text, centerX, centerY);
-        ctx.font = `italic 400 ${height * 0.035}px "Cormorant Garamond", serif`;
-        ctx.letterSpacing = "4px";
-        ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.fillText("Vlog Series // Vol. 01", centerX, centerY + height * 0.12);
-        ctx.strokeStyle = "rgba(255,255,255,0.4)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(centerX - width * 0.1, centerY + height * 0.15);
-        ctx.lineTo(centerX + width * 0.1, centerY + height * 0.15);
-        ctx.stroke();
         break;
     }
     ctx.restore();
   }, [titleSettings]);
 
   // フレーム描画
-  const renderFrame = useCallback(async (time: number) => {
-    const canvas = canvasRef.current;
+  const renderFrame = useCallback(async (time: number, targetCanvas?: HTMLCanvasElement) => {
+    const canvas = targetCanvas || canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
 
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (clips.length === 0) {
-      ctx.fillStyle = "#333";
-      ctx.font = "20px Inter";
-      ctx.textAlign = "center";
-      ctx.fillText("No clips selected", canvas.width / 2, canvas.height / 2);
-      return;
-    }
 
     let timeAccumulator = 0;
     let activeClip: VideoClip | null = null;
     let clipLocalTime = 0;
 
     for (const clip of clips) {
-      if (time >= timeAccumulator && time < timeAccumulator + clip.clipDuration) {
+      if (time >= timeAccumulator && (time < timeAccumulator + clip.clipDuration || time === totalDuration)) {
         activeClip = clip;
-        clipLocalTime = time - timeAccumulator;
+        clipLocalTime = Math.min(time - timeAccumulator, clip.clipDuration - 0.01);
         break;
       }
       timeAccumulator += clip.clipDuration;
@@ -250,323 +209,257 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       if (video) {
         const expectedTime = activeClip.startTime + clipLocalTime;
 
-        if (activeClipIdRef.current !== activeClip.id || Math.abs(video.currentTime - expectedTime) > 0.05) {
-          if (activeClipIdRef.current && activeClipIdRef.current !== activeClip.id) {
-            const prevVideo = videoElementsRef.current.get(activeClipIdRef.current);
-            if (prevVideo) prevVideo.pause();
+        // プレビュー時
+        if (!targetCanvas) {
+          if (Math.abs(video.currentTime - expectedTime) > 0.1) {
+            video.currentTime = expectedTime;
           }
+          if (isPlayingRef.current && video.paused) {
+            video.play().catch(() => { });
+          }
+        }
+        // エクスポート時（厳密なフレーム同期）
+        else {
           video.currentTime = expectedTime;
-          activeClipIdRef.current = activeClip.id;
-
-          if (isExportingRef.current) {
-            await new Promise<void>((resolve) => {
-              const onSeeked = () => {
-                video.removeEventListener('seeked', onSeeked);
-                resolve();
-              };
-              video.addEventListener('seeked', onSeeked);
-              setTimeout(resolve, 150); // モバイル向けに少し長めに待機
-            });
-          }
+          await new Promise<void>((resolve) => {
+            const onSeeked = () => {
+              video.removeEventListener('seeked', onSeeked);
+              resolve();
+            };
+            video.addEventListener('seeked', onSeeked);
+            setTimeout(resolve, 250); // モバイル環境での遅延を考慮
+          });
         }
 
-        if (!isExportingRef.current && isPlayingRef.current && video.paused) {
-          video.play().catch(e => console.error("Play error", e));
-        } else if (isExportingRef.current) {
-          video.pause();
-        }
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
         const vWidth = video.videoWidth;
         const vHeight = video.videoHeight;
         if (vWidth && vHeight) {
-          const scale = Math.min(canvas.width / vWidth, canvas.height / vHeight);
-          const w = vWidth * scale;
-          const h = vHeight * scale;
-          const x = (canvas.width - w) / 2;
-          const y = (canvas.height - h) / 2;
-          ctx.drawImage(video, x, y, w, h);
+          const canvasRatio = canvas.width / canvas.height;
+          const videoRatio = vWidth / vHeight;
+
+          let drawW, drawH, drawX, drawY;
+          if (videoRatio > canvasRatio) {
+            drawH = canvas.height;
+            drawW = vWidth * (canvas.height / vHeight);
+            drawX = (canvas.width - drawW) / 2;
+            drawY = 0;
+          } else {
+            drawW = canvas.width;
+            drawH = vHeight * (canvas.width / vWidth);
+            drawX = 0;
+            drawY = (canvas.height - drawH) / 2;
+          }
+          ctx.drawImage(video, drawX, drawY, drawW, drawH);
         }
         drawText(ctx, canvas.width, canvas.height);
       }
-    } else {
-      if (activeClipIdRef.current) {
-        const prevVideo = videoElementsRef.current.get(activeClipIdRef.current);
-        if (prevVideo) prevVideo.pause();
-        activeClipIdRef.current = null;
-      }
     }
-  }, [clips, drawText]);
+  }, [clips, drawText, totalDuration]);
 
   // アニメーションループ
   const animate = useCallback(async (timestamp: number) => {
-    if (isProcessingFrameRef.current) return;
-    isProcessingFrameRef.current = true;
+    if (!startTimeRef.current) startTimeRef.current = timestamp;
+    let elapsed = (timestamp - startTimeRef.current) / 1000;
 
-    try {
-      if (!startTimeRef.current) startTimeRef.current = timestamp;
+    if (elapsed >= totalDuration) {
+      startTimeRef.current = timestamp;
+      elapsed = 0;
+    }
 
-      let elapsed: number;
-      if (isExportingRef.current) {
-        elapsed = exportTimeRef.current;
-        exportTimeRef.current += (1 / 30);
-      } else {
-        elapsed = (timestamp - startTimeRef.current) / 1000;
-      }
+    setCurrentTime(elapsed);
+    await renderFrame(elapsed);
 
-      if (elapsed >= totalDuration) {
-        if (isExportingRef.current) {
-          if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-            mediaRecorderRef.current.stop();
-          }
-          return;
-        } else {
-          startTimeRef.current = timestamp;
-          elapsed = 0;
-        }
-      }
-
-      setCurrentTime(elapsed);
-      await renderFrame(elapsed);
-
-      if (isPlayingRef.current || isExportingRef.current) {
-        requestRef.current = requestAnimationFrame(animate);
-      }
-    } finally {
-      isProcessingFrameRef.current = false;
+    if (isPlayingRef.current) {
+      requestRef.current = requestAnimationFrame(animate);
     }
   }, [totalDuration, renderFrame]);
 
   useEffect(() => {
-    if (isPlaying || isExporting) {
+    if (isPlaying) {
       requestRef.current = requestAnimationFrame(animate);
     } else {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
       startTimeRef.current = 0;
       videoElementsRef.current.forEach(v => v.pause());
-      activeClipIdRef.current = null;
     }
-    return () => {
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
-    };
-  }, [isPlaying, isExporting, animate]);
+    return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
+  }, [isPlaying, animate]);
 
-  useEffect(() => {
-    if (!isPlaying) renderFrame(0);
-  }, [clips, isPlaying, renderFrame]);
+  useEffect(() => { if (!isPlaying) renderFrame(0); }, [clips, isPlaying, renderFrame]);
 
-  // エクスポート処理（WebM生成 -> MP4変換）
+  /**
+   * オフラインレンダリング:
+   * 1. 1コマずつ画像を生成して ffmpeg.wasm の仮想FSに書き込む (rendering)
+   * 2. 全画像を MP4 にエンコードする (encoding)
+   */
   const handleExport = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (isExporting || !isReady) return;
 
     setIsExporting(true);
     setIsPlaying(false);
-    setCurrentTime(0);
-    exportTimeRef.current = 0;
-    startTimeRef.current = 0;
-    isProcessingFrameRef.current = false;
+    setExportPhase("rendering");
+    setExportProgress(0);
+    setError(null);
+    setExportBlob(null);
 
-    const stream = canvas.captureStream(30);
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: "video/webm;codecs=vp9",
-      videoBitsPerSecond: 8000000
-    });
+    const fps = 30;
+    const totalFrames = Math.max(1, Math.ceil(totalDuration * fps));
+    const offscreenCanvas = document.createElement("canvas");
+    offscreenCanvas.width = 720; // モバイル向けバランス
+    offscreenCanvas.height = 1280;
 
-    mediaRecorderRef.current = mediaRecorder;
-    chunksRef.current = [];
+    try {
+      const ffmpeg = await loadFFmpeg();
 
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
+      // 1. レンダリング
+      for (let i = 0; i < totalFrames; i++) {
+        const frameTime = i / fps;
+        await renderFrame(frameTime, offscreenCanvas);
 
-    mediaRecorder.onstop = async () => {
-      setIsExporting(false);
-      setIsConverting(true);
-      setConvertProgress(0);
+        const blob = await new Promise<Blob | null>(res => offscreenCanvas.toBlob(res, 'image/jpeg', 0.85));
+        if (!blob) throw new Error("Frame error");
 
-      try {
-        const webmBlob = new Blob(chunksRef.current, { type: "video/webm" });
-        const ffmpeg = await loadFFmpeg();
+        const fileName = `f${i.toString().padStart(5, '0')}.jpg`;
+        await ffmpeg.writeFile(fileName, await fetchFile(blob));
 
-        await ffmpeg.writeFile("input.webm", await fetchFile(webmBlob));
-
-        // WebM -> MP4 変換 (H.264 / AAC)
-        // iPhone互換性を最大化するために yuv420p を指定
-        await ffmpeg.exec([
-          "-i", "input.webm",
-          "-c:v", "libx264",
-          "-pix_fmt", "yuv420p",
-          "-preset", "ultrafast",
-          "output.mp4"
-        ]);
-
-        const data = await ffmpeg.readFile("output.mp4");
-        const mp4Blob = new Blob([data], { type: "video/mp4" });
-        setExportBlob(mp4Blob);
-
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (!isMobile) {
-          triggerDownload(mp4Blob, `vlog-${Date.now()}.mp4`);
-          setShowSuccess(true);
-          setTimeout(() => setShowSuccess(false), 4000);
-        }
-      } catch (err) {
-        console.error("Conversion error:", err);
-        // Fallback: 変換失敗時はWebMをそのまま出す
-        const webmBlob = new Blob(chunksRef.current, { type: "video/webm" });
-        setExportBlob(webmBlob);
-      } finally {
-        setIsConverting(false);
+        setExportProgress(Math.round((i / totalFrames) * 50));
       }
-    };
 
-    mediaRecorder.start();
+      // 2. エンコード
+      setExportPhase("encoding");
+      await ffmpeg.exec([
+        "-framerate", fps.toString(),
+        "-i", "f%05d.jpg",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "ultrafast",
+        "-crf", "23",
+        "out.mp4"
+      ]);
+
+      const data = await ffmpeg.readFile("out.mp4");
+      const mp4Blob = new Blob([data], { type: "video/mp4" });
+      setExportBlob(mp4Blob);
+
+      // 掃除
+      for (let i = 0; i < totalFrames; i++) {
+        await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
+      }
+
+      if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        triggerDownload(mp4Blob, `vlog-${Date.now()}.mp4`);
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
+      }
+    } catch (err) {
+      console.error(err);
+      setError("作成中に問題が発生しました。もう一度お試しください。");
+    } finally {
+      setIsExporting(false);
+      setExportPhase("idle");
+    }
   };
 
   const handleSaveToCameraRoll = async () => {
     if (!exportBlob) return;
-    const isMp4 = exportBlob.type.includes("mp4");
-    const fileName = `vlog-${Date.now()}.${isMp4 ? "mp4" : "webm"}`;
-    const file = new File([exportBlob], fileName, { type: exportBlob.type });
+    const fileName = `vlog-${Date.now()}.mp4`;
+    const file = new File([exportBlob], fileName, { type: "video/mp4" });
 
-    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    if (navigator.share && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({
           files: [file],
           title: 'The 1s Vlog.',
-          text: '最高の1秒が繋がりました！',
         });
         setShowSuccess(true);
-        setTimeout(() => setShowSuccess(false), 4000);
-      } catch (error) {
-        if ((error as Error).name !== 'AbortError') {
-          triggerDownload(exportBlob, fileName);
-        }
+        setTimeout(() => setShowSuccess(false), 3000);
+      } catch {
+        triggerDownload(exportBlob, fileName);
       }
     } else {
       triggerDownload(exportBlob, fileName);
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 4000);
     }
   };
 
   return (
-    <div className="space-y-4 relative">
+    <div className="space-y-6 relative">
       <AnimatePresence>
         {showSuccess && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-white border border-[var(--color-accent)] rounded-2xl p-4 shadow-xl flex items-center gap-3 min-w-[280px]"
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-black text-white rounded-full px-6 py-2 shadow-2xl flex items-center gap-2 border border-white/20"
           >
-            <div className="w-10 h-10 rounded-full bg-[var(--color-accent)]/10 flex items-center justify-center text-[var(--color-accent)] shrink-0">
-              <CheckCircle2 className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-sm font-display font-bold text-[var(--color-text)]">保存しました！</p>
-              <p className="text-[10px] text-[var(--color-text-muted)] font-display italic">カメラロールを確認してください</p>
-            </div>
+            <CheckCircle2 className="w-4 h-4 text-green-400" />
+            <span className="text-xs font-bold">保存しました！</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="relative aspect-video bg-black rounded-3xl overflow-hidden border border-[var(--color-border)] shadow-2xl group">
-        <canvas
-          ref={canvasRef}
-          width={1280}
-          height={720}
-          className="w-full h-full object-contain"
-        />
+      <div className="relative aspect-[9/16] max-h-[65vh] mx-auto bg-black rounded-[2.5rem] overflow-hidden border-[6px] border-[#1a1a1a] shadow-2xl group">
+        <canvas ref={canvasRef} width={1080} height={1920} className="w-full h-full object-cover" />
 
-        {/* 進捗・ステータスオーバーレイ */}
+        {/* 状態オーバーレイ */}
         <AnimatePresence>
-          {(isExporting || isConverting || !isReady) && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-md z-30"
+          {(isExporting || !isReady) && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 backdrop-blur-xl z-30"
             >
-              <div className="w-12 h-12 relative flex items-center justify-center mb-4">
-                <Loader2 className="w-full h-full text-[var(--color-accent)] animate-spin" />
-                {isConverting && (
-                  <span className="absolute text-[10px] font-bold text-white">{convertProgress}%</span>
-                )}
-              </div>
-              <p className="text-white text-sm font-display font-medium tracking-widest uppercase">
-                {!isReady ? "Loading Media..." : isExporting ? "Recording..." : "Optimizing for Mobile..."}
+              <Loader2 className="w-10 h-10 text-[var(--color-accent)] animate-spin mb-6" />
+              <p className="text-white text-xs font-bold tracking-[0.2em] uppercase opacity-80 mb-6">
+                {!isReady ? "Media Loading" : exportPhase === "rendering" ? "Perfect Rendering" : "Optimizing MP4"}
               </p>
-              {isConverting && (
-                <div className="w-48 h-1 bg-white/20 rounded-full mt-4 overflow-hidden">
-                  <motion.div
-                    className="h-full bg-[var(--color-accent)]"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${convertProgress}%` }}
-                  />
+              {isExporting && (
+                <div className="w-48">
+                  <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
+                    <motion.div className="h-full bg-[var(--color-accent)]" animate={{ width: `${exportProgress}%` }} transition={{ duration: 0.3 }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] font-mono text-white/40">
+                    <span>{exportPhase === 'rendering' ? 'RENDER' : 'ENCODE'}</span>
+                    <span>{exportProgress}%</span>
+                  </div>
                 </div>
               )}
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* 再生ボタンオーバーレイ */}
-        {isReady && !isPlaying && !isExporting && !isConverting && (
-          <div
-            className="absolute inset-0 flex items-center justify-center bg-black/10 hover:bg-black/20 transition-all cursor-pointer z-10"
-            onClick={() => setIsPlaying(true)}
-          >
-            <motion.div
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.95 }}
-              className="w-20 h-20 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white shadow-2xl"
-            >
-              <Play className="w-10 h-10 ml-1.5" />
+        {/* 再生ボタン */}
+        {isReady && !isPlaying && !isExporting && (
+          <div className="absolute inset-0 flex items-center justify-center cursor-pointer z-10" onClick={() => setIsPlaying(true)}>
+            <motion.div whileTap={{ scale: 0.9 }} className="w-20 h-20 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20">
+              <Play className="w-8 h-8 text-white fill-current ml-1" />
             </motion.div>
+          </div>
+        )}
+
+        {error && (
+          <div className="absolute inset-x-4 bottom-20 bg-red-500/90 text-white p-4 rounded-2xl flex items-center gap-3 z-40 backdrop-blur-lg">
+            <AlertCircle className="shrink-0" />
+            <p className="text-xs font-bold">{error}</p>
           </div>
         )}
       </div>
 
-      <div className="flex items-center justify-between px-2">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setIsPlaying(!isPlaying)}
-            disabled={clips.length === 0 || isExporting || isConverting}
-            className="w-10 h-10 rounded-full bg-[var(--color-bg-secondary)] flex items-center justify-center text-[var(--color-text)] disabled:opacity-30 active:scale-90 transition-transform"
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between bg-black/5 p-4 rounded-3xl border border-black/5">
+          <button onClick={() => setIsPlaying(!isPlaying)} disabled={clips.length === 0 || isExporting}
+            className="w-12 h-12 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-30"
           >
             {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
           </button>
-          <div className="text-xs font-mono font-medium text-[var(--color-text-muted)] tabular-nums">
-            {currentTime.toFixed(1)}s / {totalDuration.toFixed(1)}s
+          <div className="text-right">
+            <p className="text-[10px] uppercase font-bold text-black/30 tracking-tight">Current Time</p>
+            <p className="text-xl font-mono font-bold">{currentTime.toFixed(1)}s</p>
           </div>
         </div>
 
-        <div className="flex gap-2">
-          {exportBlob && (
-            <Button
-              variant="accent"
-              onClick={handleSaveToCameraRoll}
-              className="rounded-full px-6 shadow-lg shadow-[var(--color-accent)]/20 animate-in fade-in zoom-in duration-300"
-            >
-              <Share2 className="w-4 h-4 mr-2" />
-              保存 / 共有
-            </Button>
-          )}
-
-          <Button
-            variant={exportBlob ? "outline" : "accent"}
-            onClick={handleExport}
-            disabled={clips.length === 0 || isExporting || isConverting}
-            className={cn("rounded-full px-6", !exportBlob && "shadow-lg shadow-[var(--color-accent)]/20")}
-          >
-            {isExporting || isConverting ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4 mr-2" />
-            )}
-            {isExporting ? "録画中..." : isConverting ? "変換中..." : exportBlob ? "作り直す" : "動画を作成"}
+        <div className="grid grid-cols-2 gap-3">
+          <Button variant={exportBlob ? "outline" : "accent"} onClick={handleExport} disabled={clips.length === 0 || isExporting} className="rounded-2xl h-14 font-bold">
+            {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+            {exportBlob ? "作り直す" : "動画を作成"}
+          </Button>
+          <Button variant="accent" onClick={handleSaveToCameraRoll} disabled={!exportBlob || isExporting} className="rounded-2xl h-14 font-bold shadow-xl shadow-[var(--color-accent)]/20">
+            <Share2 className="w-4 h-4 mr-2" />
+            保存する
           </Button>
         </div>
       </div>
