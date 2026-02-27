@@ -6,7 +6,6 @@ import { VideoClip, TitleSettings, TEXT_STYLES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { motion, AnimatePresence } from "motion/react";
 import { Plus, Type, ChevronDown, ChevronUp, Share2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export default function App() {

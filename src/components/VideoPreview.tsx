@@ -2,7 +2,6 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { VideoClip, TitleSettings } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
@@ -42,7 +41,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   const requestRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const activeClipIdRef = useRef<string | null>(null);
   const isPlayingRef = useRef<boolean>(false);
   const ffmpegRef = useRef<FFmpeg | null>(null);
 

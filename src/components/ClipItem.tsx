@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { VideoClip } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { formatTime, cn } from "@/lib/utils";
+import { formatTime } from "@/lib/utils";
 import { Trash2, Play, Pause, ImageIcon } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -19,7 +19,6 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
   const [thumbnail, setThumbnail] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoUrlRef = useRef<string | null>(null);
-  const thumbVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const {
     attributes,
