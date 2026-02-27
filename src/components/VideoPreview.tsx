@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { VideoClip, TitleSettings } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle, Sparkles } from "lucide-react";
+import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle, Clapperboard } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
@@ -389,23 +389,22 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         try {
           // まずシェアを試みる（iOSではここがユーザー操作と見なされず弾かれる場合がある）
           await navigator.share({ files: [file], title: 'The 1s Vlog.' });
-          setShowSuccess(true);
-          setTimeout(() => setShowSuccess(false), 3000);
         } catch (err) {
           // エラー（NotAllowedError等）の場合は直接ファイルダウンロードに自動遷移
           triggerDownload(mp4Blob, fileName);
-          setShowSuccess(true);
-          setTimeout(() => setShowSuccess(false), 3000);
         }
       } else {
         // シェア機能自体がない場合はそのままダウンロード
         triggerDownload(mp4Blob, fileName);
-        setShowSuccess(true);
-        setTimeout(() => setShowSuccess(false), 3000);
       }
+
+      // 作成完了の合図としてポップアップを表示
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 5000); // 読めるように5秒に延長
 
     } catch (err) {
       console.error(err);
+
       const errMsg = err instanceof Error ? err.message : String(err);
       setError(`作成エラー: ${errMsg}`);
     } finally {
@@ -421,8 +420,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     if (navigator.share && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file], title: 'The 1s Vlog.' });
-        setShowSuccess(true);
-        setTimeout(() => setShowSuccess(false), 3000);
       } catch { triggerDownload(exportBlob, fileName); }
     } else triggerDownload(exportBlob, fileName);
   };
@@ -432,10 +429,10 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       <AnimatePresence>
         {showSuccess && (
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-black text-white rounded-full px-6 py-2 shadow-2xl flex items-center gap-2 border border-white/20"
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-black text-white rounded-full px-5 py-2.5 shadow-2xl flex items-center gap-2.5 border border-white/20 whitespace-nowrap"
           >
-            <CheckCircle2 className="w-4 h-4 text-green-400" />
-            <span className="text-xs font-bold">保存しました！</span>
+            <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
+            <span className="text-[11px] font-bold tracking-wide">動画が完成しました！<br />下部ボタンから保存してください</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -517,7 +514,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           ) : exportBlob ? (
             <Download className="w-5 h-5 mr-3" />
           ) : (
-            <Sparkles className="w-5 h-5 mr-3" />
+            <Clapperboard className="w-5 h-5 mr-3" />
           )}
           {isExporting ? "動画を作成中..." : exportBlob ? "動画を保存する" : "動画を作成する"}
         </Button>
