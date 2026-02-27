@@ -213,55 +213,81 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       timeAccumulator += clip.clipDuration;
     }
 
-    if (activeClip) {
-      const video = videoElementsRef.current.get(activeClip.id);
-      if (video) {
-        const expectedTime = activeClip.startTime + clipLocalTime;
+    // --------- 事前シーク（Pre-seek）と次の動画の準備 ---------
+    // 黒いもたつきを防ぐため、再生中の現在のクリップとは別に、
+    // 終了0.1秒前〜次のクリップの準備（0.01秒地点への事前シーク）を行う
+    const timeRemainingInClip = activeClip.clipDuration - clipLocalTime;
+    if (!isExport && isPlayingRef.current && timeRemainingInClip < 0.1) {
+      let timeAccum = 0;
+      let nextClip: VideoClip | null = null;
+      for (const clip of clips) {
+        timeAccum += clip.clipDuration;
+        if (timeAccum > time) {
+          const nextClipIdx = clips.findIndex(c => c.id === clip.id) + 1;
+          if (nextClipIdx < clips.length) nextClip = clips[nextClipIdx];
+          break;
+        }
+      }
+      if (nextClip) {
+        const nextVideo = videoElementsRef.current.get(nextClip.id);
+        if (nextVideo && nextVideo.paused) {
+          const preSeekTime = nextClip.startTime + 0.01; // 最初のフレームを準備
+          if (Math.abs(nextVideo.currentTime - preSeekTime) > 0.05) {
+            nextVideo.currentTime = preSeekTime;
+          }
+        }
+      }
+    }
+    // ------------------------------------------------------------
 
-        if (!isExport) {
-          if (Math.abs(video.currentTime - expectedTime) > 0.1) {
-            video.currentTime = expectedTime;
-          }
-          if (isPlayingRef.current && video.paused) {
-            video.play().catch(() => { });
-          }
-        } else {
+    const video = videoElementsRef.current.get(activeClip.id);
+    if (video) {
+      const expectedTime = activeClip.startTime + clipLocalTime;
+
+      if (!isExport) {
+        if (Math.abs(video.currentTime - expectedTime) > 0.1) {
           video.currentTime = expectedTime;
-          await new Promise<void>((resolve) => {
-            const onSeeked = () => {
-              video.removeEventListener('seeked', onSeeked);
-              resolve();
-            };
-            video.addEventListener('seeked', onSeeked);
-            setTimeout(resolve, 250);
-          });
         }
-
-        const vWidth = video.videoWidth;
-        const vHeight = video.videoHeight;
-        if (vWidth && vHeight) {
-          const canvasRatio = canvas.width / canvas.height;
-          const videoRatio = vWidth / vHeight;
-
-          let drawW, drawH, drawX, drawY;
-          if (videoRatio > canvasRatio) {
-            drawH = canvas.height;
-            drawW = vWidth * (canvas.height / vHeight);
-            drawX = (canvas.width - drawW) / 2;
-            drawY = 0;
-          } else {
-            drawW = canvas.width;
-            drawH = vHeight * (canvas.width / vWidth);
-            drawX = 0;
-            drawY = (canvas.height - drawH) / 2;
-          }
-          ctx.drawImage(video, drawX, drawY, drawW, drawH);
+        if (isPlayingRef.current && video.paused) {
+          video.play().catch(() => { });
         }
+      } else {
+        // Export時は正確なフレーム同期のため、短いタイムアウトで待機
+        video.currentTime = expectedTime;
+        await new Promise<void>((resolve) => {
+          const onSeeked = () => {
+            video.removeEventListener('seeked', onSeeked);
+            resolve();
+          };
+          video.addEventListener('seeked', onSeeked);
+          setTimeout(resolve, 100); // 待機時間を100msに短縮し効率化
+        });
+      }
 
-        // 🔥 プランB: 保存時のみテキストをその場で合成（プレビュー時は重なっているので不要）
-        if (isExport && textCanvasRef.current) {
-          ctx.drawImage(textCanvasRef.current, 0, 0);
+      const vWidth = video.videoWidth;
+      const vHeight = video.videoHeight;
+      if (vWidth && vHeight) {
+        const canvasRatio = canvas.width / canvas.height;
+        const videoRatio = vWidth / vHeight;
+
+        let drawW, drawH, drawX, drawY;
+        if (videoRatio > canvasRatio) {
+          drawH = canvas.height;
+          drawW = vWidth * (canvas.height / vHeight);
+          drawX = (canvas.width - drawW) / 2;
+          drawY = 0;
+        } else {
+          drawW = canvas.width;
+          drawH = vHeight * (canvas.width / vWidth);
+          drawX = 0;
+          drawY = (canvas.height - drawH) / 2;
         }
+        ctx.drawImage(video, drawX, drawY, drawW, drawH);
+      }
+
+      // 🔥 プランB: 保存時のみテキストをその場で合成（プレビュー時は重なっているので不要）
+      if (isExport && textCanvasRef.current) {
+        ctx.drawImage(textCanvasRef.current, 0, 0);
       }
     }
   }, [clips, totalDuration]);
@@ -331,7 +357,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     setExportProgress(0);
     setError(null);
 
-    const fps = 30;
+    // 60fpsへの倍増化
+    const fps = 60;
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps));
     const offscreenCanvas = document.createElement("canvas");
     offscreenCanvas.width = 1280;
@@ -355,8 +382,28 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       setExportBlob(mp4Blob);
       for (let i = 0; i < totalFrames; i++) await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
 
-      // FFmpegのエンコードが完了したら、動画データを保持して一旦待機（完了状態へ）
-      // 強力なセキュリティ機能（NotAllowedError）を回避するため、これ以降の「自動シェア画面表示」は行わない
+      // 1クリック保存への回帰（シェア・ダウンロードのフォールバック）
+      const fileName = `vlog-${Date.now()}.mp4`;
+      const file = new File([mp4Blob], fileName, { type: "video/mp4" });
+      if (navigator.share && navigator.canShare({ files: [file] })) {
+        try {
+          // まずシェアを試みる（iOSではここがユーザー操作と見なされず弾かれる場合がある）
+          await navigator.share({ files: [file], title: 'The 1s Vlog.' });
+          setShowSuccess(true);
+          setTimeout(() => setShowSuccess(false), 3000);
+        } catch (err) {
+          // エラー（NotAllowedError等）の場合は直接ファイルダウンロードに自動遷移
+          triggerDownload(mp4Blob, fileName);
+          setShowSuccess(true);
+          setTimeout(() => setShowSuccess(false), 3000);
+        }
+      } else {
+        // シェア機能自体がない場合はそのままダウンロード
+        triggerDownload(mp4Blob, fileName);
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
+      }
+
     } catch (err) {
       console.error(err);
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -465,8 +512,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           disabled={clips.length === 0 || isExporting}
           className="w-full h-14 rounded-[2rem] font-bold shadow-xl shadow-[var(--color-accent)]/30 text-base active:scale-95 transition-transform"
         >
-          {isExporting ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : exportBlob ? <Share2 className="w-5 h-5 mr-3" /> : <Download className="w-5 h-5 mr-3" />}
-          {isExporting ? "作成中..." : "動画を保存する"}
+          {isExporting ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : <Download className="w-5 h-5 mr-3" />}
+          {isExporting ? "動画を作成中..." : "動画を保存する"}
         </Button>
       </div>
 
