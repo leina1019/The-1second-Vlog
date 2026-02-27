@@ -1,0 +1,5 @@
+{
+  "name": "The 1second Vlog.",
+  "description": "複数の動画を1秒ずつ切り取って繋げる、ミニマルでエモいVlog作成アプリ。",
+  "requestFramePermissions": []
+}

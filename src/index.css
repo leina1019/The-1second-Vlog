@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Playfair Display", serif;
+  --font-serif: "Cormorant Garamond", serif;
+
+  /* Vintage Floral Palette */
+  --color-bg: #F3F0E9; /* Light Cream/Paper */
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #FDFCF8;
+  --color-border: #D8D3CC;
+  
+  --color-accent: #5D7052; /* Vintage Olive Green */
+  --color-accent-hover: #4A5A41;
+  
+  --color-secondary: #D98E73; /* Muted Terra Cotta */
+  
+  --color-text: #2D2D2D; /* Dark Charcoal */
+  --color-text-muted: #787570; /* Muted Grey-Brown */
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(#D8D3CC 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
