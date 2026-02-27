@@ -113,8 +113,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     };
   }, [clips]);
 
-  // テキストオーバーレイ描画
-  const drawText = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, isHighQuality: boolean = false) => {
+  // テキストオーバーレイ描画（保存用Canvasのみで使用）
+  const drawTextOnCanvas = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, isHighQuality: boolean = false) => {
     const { text, style } = titleSettings;
     if (!text || style === "none") return;
 
@@ -127,7 +127,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.font = `bold ${height * 0.08}px "Inter", sans-serif`;
-        // 🔥 アダプティブ描画: プレビュー時は影をスキップ、保存時のみ適用
         if (isHighQuality) {
           ctx.shadowColor = "rgba(0,0,0,0.6)";
           ctx.shadowBlur = 12;
@@ -178,7 +177,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "middle";
         ctx.font = `italic 700 ${height * 0.12}px "serif"`;
         ctx.fillStyle = "white";
-        // 🔥 高品質時のみ少し影をつける
         if (isHighQuality) {
           ctx.shadowColor = "rgba(0,0,0,0.3)";
           ctx.shadowBlur = 8;
@@ -189,16 +187,14 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     ctx.restore();
   }, [titleSettings]);
 
-  // フレーム描画
+  // フレーム描画（プレビュー・保存兼用）
   const renderFrame = useCallback(async (time: number, targetCanvas?: HTMLCanvasElement) => {
-    // 🔥 保存用キャンバスかプレビュー用かを判定
     const canvas = targetCanvas || canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    // 🔥 保存（targetCanvasあり）の時だけ高品質フラグを立てる
-    const isHighQuality = !!targetCanvas;
+    const isExport = !!targetCanvas;
 
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -221,8 +217,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       if (video) {
         const expectedTime = activeClip.startTime + clipLocalTime;
 
-        // プレビュー時
-        if (!targetCanvas) {
+        if (!isExport) {
           if (Math.abs(video.currentTime - expectedTime) > 0.1) {
             video.currentTime = expectedTime;
           }
@@ -230,7 +225,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
             video.play().catch(() => { });
           }
         }
-        // エクスポート時（厳密なフレーム同期）
         else {
           video.currentTime = expectedTime;
           await new Promise<void>((resolve) => {
@@ -239,7 +233,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
               resolve();
             };
             video.addEventListener('seeked', onSeeked);
-            setTimeout(resolve, 250); // モバイル環境での遅延を考慮
+            setTimeout(resolve, 250);
           });
         }
 
@@ -263,10 +257,68 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           }
           ctx.drawImage(video, drawX, drawY, drawW, drawH);
         }
-        drawText(ctx, canvas.width, canvas.height, isHighQuality);
+
+        // 🔥 保存時のみCanvasにテキストを描く
+        if (isExport) {
+          drawTextOnCanvas(ctx, canvas.width, canvas.height, true);
+        }
       }
     }
-  }, [clips, drawText, totalDuration]);
+  }, [clips, drawTextOnCanvas, totalDuration]);
+
+  // HTMLプレビュー用のテキスト描画コンポーネント
+  const HTMLTitleOverlay = () => {
+    const { text, style } = titleSettings;
+    if (!text || style === "none") return null;
+
+    return (
+      <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center overflow-hidden">
+        {style === "simple" && (
+          <motion.h2 initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-white font-bold text-[clamp(1rem,8vw,4rem)] text-center drop-shadow-2xl">
+            {text}
+          </motion.h2>
+        )}
+        {style === "minimal" && (
+          <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="absolute bottom-[8%] w-full text-center">
+            <span className="text-white font-light tracking-[0.4em] uppercase text-[clamp(0.6rem,3vw,1.2rem)] drop-shadow-lg">
+              {text}
+            </span>
+          </motion.div>
+        )}
+        {style === "camcorder" && (
+          <div className="absolute inset-x-[6%] inset-y-[6%] flex flex-col justify-between font-mono">
+            <div className="flex justify-between items-start text-[#FFD700] text-[clamp(0.5rem,2.5vw,1rem)] font-bold">
+              <span>REC  {new Date().toLocaleTimeString('en-US', { hour12: false })}</span>
+            </div>
+            <div className="flex justify-between items-end text-[#FFD700] text-[clamp(0.5rem,2.5vw,1rem)] uppercase font-bold">
+              <span>{new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</span>
+              <span className="max-w-[50%] truncate">{text}</span>
+            </div>
+          </div>
+        )}
+        {style === "cinematic" && (
+          <div className="absolute inset-0 flex flex-col h-full pointer-events-none">
+            <div className="h-[12%] bg-black w-full shrink-0" />
+            <div className="flex-1 flex items-end justify-center pb-[3%] shrink-0">
+              <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-white/90 font-serif italic tracking-[0.3em] text-[clamp(0.7rem,4vw,2rem)] text-center px-4">
+                {text}
+              </motion.span>
+            </div>
+            <div className="h-[12%] bg-black w-full" />
+          </div>
+        )}
+        {style === "magazine" && (
+          <motion.h1
+            initial={{ scale: 1.1, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="text-white font-serif italic font-black text-[clamp(2rem,12vw,6rem)] text-center leading-none"
+          >
+            {text}
+          </motion.h1>
+        )}
+      </div>
+    );
+  };
 
   // アニメーションループ
   const animate = useCallback(async (timestamp: number) => {
@@ -303,10 +355,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
   const handleSeek = useCallback((time: number) => {
     setCurrentTime(time);
     if (!isPlaying) {
-      // 停止中の時はその瞬間のフレームを強制描画
       setTimeout(() => renderFrame(time), 0);
     }
-    // 再生中の場合は、animateループが次のフレームで自動的に正しい位置を拾う
     if (isPlaying) {
       startTimeRef.current = performance.now() - (time * 1000);
     }
@@ -314,7 +364,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   useEffect(() => {
     if (isReady && !isPlaying) {
-      // ロード完了時に初回フレームを確実に描画
       const timer = setTimeout(() => renderFrame(0), 100);
       return () => clearTimeout(timer);
     }
@@ -322,23 +371,16 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   useEffect(() => {
     setExportBlob(null);
-    setCurrentTime(0); // クリップ変更時は0秒に戻す
+    setCurrentTime(0);
   }, [clips, titleSettings]);
 
-  /**
-   * 統合された保存アクション:
-   * 1. 動画が未作成ならレンダリング（rendering -> encoding）を開始
-   * 2. 完了後、または既に作成済みの場合は、即座に共有メニュー（カメラロール保存）を開く
-   */
   const handleMainAction = async () => {
     if (isExporting || !isReady) return;
-
     if (exportBlob) {
       handleSaveToCameraRoll();
       return;
     }
 
-    // エクスポート開始
     setIsExporting(true);
     setIsPlaying(false);
     setExportPhase("rendering");
@@ -353,7 +395,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
     try {
       const ffmpeg = await loadFFmpeg();
-
       for (let i = 0; i < totalFrames; i++) {
         const frameTime = i / fps;
         await renderFrame(frameTime, offscreenCanvas);
@@ -363,30 +404,19 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         await ffmpeg.writeFile(fileName, await fetchFile(blob));
         setExportProgress(Math.round((i / totalFrames) * 50));
       }
-
       setExportPhase("encoding");
       await ffmpeg.exec(["-framerate", fps.toString(), "-i", "f%05d.jpg", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "out.mp4"]);
-
       const data = await ffmpeg.readFile("out.mp4");
       const mp4Blob = new Blob([data], { type: "video/mp4" });
       setExportBlob(mp4Blob);
-
-      for (let i = 0; i < totalFrames; i++) {
-        await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
-      }
-
-      // 書き出し完了後、自動で保存/共有をトリガー
+      for (let i = 0; i < totalFrames; i++) await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
       const fileName = `vlog-${Date.now()}.mp4`;
       const file = new File([mp4Blob], fileName, { type: "video/mp4" });
-
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: 'The 1s Vlog.' });
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
-      } else {
-        triggerDownload(mp4Blob, fileName);
-      }
-
+      } else triggerDownload(mp4Blob, fileName);
     } catch (err) {
       console.error(err);
       setError("作成中に問題が発生しました。");
@@ -400,18 +430,13 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     if (!exportBlob) return;
     const fileName = `vlog-${Date.now()}.mp4`;
     const file = new File([exportBlob], fileName, { type: "video/mp4" });
-
     if (navigator.share && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file], title: 'The 1s Vlog.' });
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
-      } catch {
-        triggerDownload(exportBlob, fileName);
-      }
-    } else {
-      triggerDownload(exportBlob, fileName);
-    }
+      } catch { triggerDownload(exportBlob, fileName); }
+    } else triggerDownload(exportBlob, fileName);
   };
 
   return (
@@ -429,6 +454,9 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
       <div className="relative aspect-video max-h-[60vh] mx-auto bg-black rounded-[2rem] overflow-hidden border-4 border-white shadow-xl group">
         <canvas ref={canvasRef} width={1280} height={720} className="w-full h-full object-contain" />
+
+        {/* 🔥 プレビュー用のHTML/CSSレイヤー */}
+        {!isExporting && isReady && <HTMLTitleOverlay />}
 
         <AnimatePresence>
           {(isExporting || !isReady) && (
