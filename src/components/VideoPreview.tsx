@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { VideoClip, TitleSettings } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle } from "lucide-react";
+import { Play, Pause, Download, Loader2, CheckCircle2, Share2, AlertCircle, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
@@ -512,8 +512,14 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           disabled={clips.length === 0 || isExporting}
           className="w-full h-14 rounded-[2rem] font-bold shadow-xl shadow-[var(--color-accent)]/30 text-base active:scale-95 transition-transform"
         >
-          {isExporting ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : <Download className="w-5 h-5 mr-3" />}
-          {isExporting ? "動画を作成中..." : "動画を保存する"}
+          {isExporting ? (
+            <Loader2 className="w-5 h-5 mr-3 animate-spin" />
+          ) : exportBlob ? (
+            <Download className="w-5 h-5 mr-3" />
+          ) : (
+            <Sparkles className="w-5 h-5 mr-3" />
+          )}
+          {isExporting ? "動画を作成中..." : exportBlob ? "動画を保存する" : "動画を作成する"}
         </Button>
       </div>
 
