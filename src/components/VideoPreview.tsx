@@ -12,7 +12,6 @@ interface VideoPreviewProps {
   titleSettings: TitleSettings;
 }
 
-// ダウンロードFallbackヘルパー
 function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -28,7 +27,8 @@ function triggerDownload(blob: Blob, fileName: string) {
 }
 
 export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoCanvasRef = useRef<HTMLCanvasElement>(null);
+  const textCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
@@ -52,31 +52,23 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   const totalDuration = clips.reduce((acc, clip) => acc + clip.clipDuration, 0);
 
-  // FFmpegのロード
   const loadFFmpeg = async () => {
     if (ffmpegRef.current) return ffmpegRef.current;
-
-    // Coreのバージョンと互換性を確保
     const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
     const ffmpeg = new FFmpeg();
-
     ffmpeg.on("progress", ({ progress }) => {
-      // エンコードフェーズ: 50% -> 100%
       if (exportPhase === "encoding") {
         setExportProgress(50 + Math.round(progress * 50));
       }
     });
-
     await ffmpeg.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
     });
-
     ffmpegRef.current = ffmpeg;
     return ffmpeg;
   };
 
-  // 動画のプリロード
   useEffect(() => {
     let loadedCount = 0;
     const totalClips = clips.length;
@@ -113,8 +105,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
     };
   }, [clips]);
 
-  // テキストオーバーレイ描画（保存用Canvasのみで使用）
-  const drawTextOnCanvas = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, isHighQuality: boolean = false) => {
+  // 🔥 プランB: テキスト描画関数（常に最高画質）
+  const drawTextOnCanvas = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, fixedTime?: Date) => {
     const { text, style } = titleSettings;
     if (!text || style === "none") return;
 
@@ -127,10 +119,8 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.font = `bold ${height * 0.08}px "Inter", sans-serif`;
-        if (isHighQuality) {
-          ctx.shadowColor = "rgba(0,0,0,0.6)";
-          ctx.shadowBlur = 12;
-        }
+        ctx.shadowColor = "rgba(0,0,0,0.6)";
+        ctx.shadowBlur = 12;
         ctx.fillStyle = "white";
         ctx.fillText(text, centerX, centerY);
         break;
@@ -149,7 +139,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "bottom";
         ctx.font = `${height * 0.04}px "JetBrains Mono", monospace`;
         ctx.fillStyle = "#FFD700";
-        const now = new Date();
+        const now = fixedTime || new Date();
         const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase();
         ctx.fillText(`REC  ${timeStr}`, width * 0.06, height * 0.88);
@@ -177,19 +167,28 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         ctx.textBaseline = "middle";
         ctx.font = `italic 700 ${height * 0.12}px "serif"`;
         ctx.fillStyle = "white";
-        if (isHighQuality) {
-          ctx.shadowColor = "rgba(0,0,0,0.3)";
-          ctx.shadowBlur = 8;
-        }
+        ctx.shadowColor = "rgba(0,0,0,0.3)";
+        ctx.shadowBlur = 8;
         ctx.fillText(text, centerX, centerY);
         break;
     }
     ctx.restore();
   }, [titleSettings]);
 
+  // 🔥 プランB: テキストのみを専用Canvasに一度だけ描画（キャッシュ）
+  useEffect(() => {
+    const canvas = textCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // キャンバスの初期化
+    drawTextOnCanvas(ctx, canvas.width, canvas.height);
+  }, [titleSettings, drawTextOnCanvas]);
+
   // フレーム描画（プレビュー・保存兼用）
   const renderFrame = useCallback(async (time: number, targetCanvas?: HTMLCanvasElement) => {
-    const canvas = targetCanvas || canvasRef.current;
+    const canvas = targetCanvas || videoCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
@@ -224,8 +223,7 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           if (isPlayingRef.current && video.paused) {
             video.play().catch(() => { });
           }
-        }
-        else {
+        } else {
           video.currentTime = expectedTime;
           await new Promise<void>((resolve) => {
             const onSeeked = () => {
@@ -258,69 +256,14 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
           ctx.drawImage(video, drawX, drawY, drawW, drawH);
         }
 
-        // 🔥 保存時のみCanvasにテキストを描く
-        if (isExport) {
-          drawTextOnCanvas(ctx, canvas.width, canvas.height, true);
+        // 🔥 プランB: 保存時のみテキストをその場で合成（プレビュー時は重なっているので不要）
+        if (isExport && textCanvasRef.current) {
+          ctx.drawImage(textCanvasRef.current, 0, 0);
         }
       }
     }
-  }, [clips, drawTextOnCanvas, totalDuration]);
+  }, [clips, totalDuration]);
 
-  // HTMLプレビュー用のテキスト描画コンポーネント
-  const HTMLTitleOverlay = () => {
-    const { text, style } = titleSettings;
-    if (!text || style === "none") return null;
-
-    return (
-      <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center overflow-hidden">
-        {style === "simple" && (
-          <motion.h2 initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-white font-bold text-[clamp(1rem,8vw,4rem)] text-center drop-shadow-2xl">
-            {text}
-          </motion.h2>
-        )}
-        {style === "minimal" && (
-          <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="absolute bottom-[8%] w-full text-center">
-            <span className="text-white font-light tracking-[0.4em] uppercase text-[clamp(0.6rem,3vw,1.2rem)] drop-shadow-lg">
-              {text}
-            </span>
-          </motion.div>
-        )}
-        {style === "camcorder" && (
-          <div className="absolute inset-x-[6%] inset-y-[6%] flex flex-col justify-between font-mono">
-            <div className="flex justify-between items-start text-[#FFD700] text-[clamp(0.5rem,2.5vw,1rem)] font-bold">
-              <span>REC  {new Date().toLocaleTimeString('en-US', { hour12: false })}</span>
-            </div>
-            <div className="flex justify-between items-end text-[#FFD700] text-[clamp(0.5rem,2.5vw,1rem)] uppercase font-bold">
-              <span>{new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</span>
-              <span className="max-w-[50%] truncate">{text}</span>
-            </div>
-          </div>
-        )}
-        {style === "cinematic" && (
-          <div className="absolute inset-0 flex flex-col h-full pointer-events-none">
-            <div className="h-[12%] bg-black w-full shrink-0" />
-            <div className="flex-1 flex items-end justify-center pb-[3%] shrink-0">
-              <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-white/90 font-serif italic tracking-[0.3em] text-[clamp(0.7rem,4vw,2rem)] text-center px-4">
-                {text}
-              </motion.span>
-            </div>
-            <div className="h-[12%] bg-black w-full" />
-          </div>
-        )}
-        {style === "magazine" && (
-          <motion.h1
-            initial={{ scale: 1.1, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="text-white font-serif italic font-black text-[clamp(2rem,12vw,6rem)] text-center leading-none"
-          >
-            {text}
-          </motion.h1>
-        )}
-      </div>
-    );
-  };
-
-  // アニメーションループ
   const animate = useCallback(async (timestamp: number) => {
     if (!startTimeRef.current) startTimeRef.current = timestamp;
     let elapsed = (timestamp - startTimeRef.current) / 1000;
@@ -351,7 +294,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
 
   useEffect(() => { if (!isPlaying) renderFrame(0); }, [clips, isPlaying, renderFrame]);
 
-  // 再生位置の変更（シーク機能）
   const handleSeek = useCallback((time: number) => {
     setCurrentTime(time);
     if (!isPlaying) {
@@ -453,10 +395,9 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       </AnimatePresence>
 
       <div className="relative aspect-video max-h-[60vh] mx-auto bg-black rounded-[2rem] overflow-hidden border-4 border-white shadow-xl group">
-        <canvas ref={canvasRef} width={1280} height={720} className="w-full h-full object-contain" />
-
-        {/* 🔥 プレビュー用のHTML/CSSレイヤー */}
-        {!isExporting && isReady && <HTMLTitleOverlay />}
+        {/* 🔥 プランB: 二階建てCanvas構成 */}
+        <canvas ref={videoCanvasRef} width={1280} height={720} className="absolute inset-0 w-full h-full object-contain" />
+        <canvas ref={textCanvasRef} width={1280} height={720} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
 
         <AnimatePresence>
           {(isExporting || !isReady) && (
@@ -488,7 +429,6 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       </div>
 
       <div className="space-y-4">
-        {/* 大人可愛いコントロールパネル */}
         <div className="bg-white/90 backdrop-blur-xl p-5 rounded-[2.5rem] border border-black/5 shadow-sm space-y-4">
           <div className="flex items-center gap-5">
             <button
