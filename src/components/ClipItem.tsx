@@ -48,6 +48,7 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
 
       // 0:00だと真っ黒になることが多いため、0.05秒ほどオフセットして抽出
       video.currentTime = Math.min(clip.startTime + 0.05, clip.duration);
+      video.load(); // iOS Safari等への明示的なロード指示
 
       await new Promise<void>((resolve) => {
         const onSeeked = () => {
@@ -56,7 +57,7 @@ export function ClipItem({ clip, index, onUpdate, onRemove }: ClipItemProps) {
         };
         video.addEventListener('seeked', onSeeked);
         // Fallback
-        setTimeout(resolve, 1000);
+        setTimeout(resolve, 1500);
       });
 
       if (!isMounted) {

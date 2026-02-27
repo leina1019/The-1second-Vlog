@@ -85,12 +85,16 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
         video.playsInline = true;
         video.preload = "auto";
 
-        const onCanPlay = () => {
+        const onLoadedData = () => {
           loadedCount++;
           if (loadedCount === totalClips) setIsReady(true);
-          video.removeEventListener("canplaythrough", onCanPlay);
+          video.removeEventListener("loadeddata", onLoadedData);
         };
-        video.addEventListener("canplaythrough", onCanPlay);
+        video.addEventListener("loadeddata", onLoadedData);
+
+        // iOS Safari等への明示的なロード指示
+        video.load();
+
         videoElementsRef.current.set(clip.id, video);
       } else {
         loadedCount++;
@@ -350,16 +354,13 @@ export function VideoPreview({ clips, titleSettings }: VideoPreviewProps) {
       const mp4Blob = new Blob([data], { type: "video/mp4" });
       setExportBlob(mp4Blob);
       for (let i = 0; i < totalFrames; i++) await ffmpeg.deleteFile(`f${i.toString().padStart(5, '0')}.jpg`);
-      const fileName = `vlog-${Date.now()}.mp4`;
-      const file = new File([mp4Blob], fileName, { type: "video/mp4" });
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'The 1s Vlog.' });
-        setShowSuccess(true);
-        setTimeout(() => setShowSuccess(false), 3000);
-      } else triggerDownload(mp4Blob, fileName);
+
+      // FFmpegのエンコードが完了したら、動画データを保持して一旦待機（完了状態へ）
+      // 強力なセキュリティ機能（NotAllowedError）を回避するため、これ以降の「自動シェア画面表示」は行わない
     } catch (err) {
       console.error(err);
-      setError("作成中に問題が発生しました。");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setError(`作成エラー: ${errMsg}`);
     } finally {
       setIsExporting(false);
       setExportPhase("idle");
